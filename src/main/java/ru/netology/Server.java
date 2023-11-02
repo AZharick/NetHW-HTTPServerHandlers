@@ -6,9 +6,8 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -18,27 +17,25 @@ public class Server {
            "/styles.css", "/app.js", "/links.html", "/forms.html", "/classic.html", "/events.html", "/events.js");
    ServerSocket serverSocket;
    Socket clientSocket;
-   private Map<String, Handler> getHandlers;
-   private Map<String, Handler> postHandlers;
+   private ConcurrentHashMap<String, Handler> getHandlers;
+   private ConcurrentHashMap<String, Handler> postHandlers;
 
    public Server() {
-      getHandlers = new HashMap<>();
-      postHandlers = new HashMap<>();
+      getHandlers = new ConcurrentHashMap<>();
+      postHandlers = new ConcurrentHashMap<>();
    }
 
    public void addHandler(String method, String path, Handler handler) {
-      if (method.equals("GET") && validPaths.contains(path)) {
+      if (method.equals("GET") && !getHandlers.containsKey(path)) {
          getHandlers.put(path, handler);
-         System.out.println("> GET-handler added");
-      } else if (method.equals("POST") && validPaths.contains(path)) {
+      } else if (method.equals("POST") && !postHandlers.containsKey(path)) {
          postHandlers.put(path, handler);
-         System.out.println("> POST-handler added");
       }
    }
 
    public void start() throws IOException {
       serverSocket = new ServerSocket(PORT);
-      System.out.println("Server started at port "+ PORT);
+      System.out.println("Server started at port " + PORT);
       ExecutorService threadPool = Executors.newFixedThreadPool(64);
 
       while (true) {
@@ -60,29 +57,27 @@ public class Server {
                  final var in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
                  final var out = new BufferedOutputStream(socket.getOutputStream());
          ) {
-            int c;
-            StringBuilder wholeRequest = new StringBuilder();
-            System.out.println("> reading request...");
-            while((c=in.read()) != -1) {
-               wholeRequest.append((char) c);
+            final var requestLine = in.readLine();
+            System.out.println("> request received: " + requestLine);
+            final var parts = requestLine.split(" ");
+
+            if (parts.length != 3) {
+               System.out.println("*** wrong request format! ***");
+               clientSocket.close();
+               return;
             }
-            System.out.println("> wholeRequest:\n\n" + wholeRequest);
 
-            Request currentRequest = parseHttpRequest(wholeRequest.toString());
+            final var method = parts[0];
+            final var path = parts[1];
+            Request request = new Request(method, path);
 
-            if(currentRequest.getMethod().equals("GET")
-                    && getHandlers.containsKey(currentRequest.getPath())
-                    //&& validPaths.contains(currentRequest.getPath())
-            ) {
-               Handler handler = getHandlers.get(currentRequest.getPath());
-               handler.handle(currentRequest, out);
+            if (request.getMethod().equals("GET") && getHandlers.containsKey(request.getPath())) {
+               Handler handler = getHandlers.get(request.getPath());
+               handler.handle(request, out);
 
-            } else if (currentRequest.getMethod().equals("POST")
-                    && postHandlers.containsKey(currentRequest.getPath())
-                    //&& validPaths.contains(currentRequest.getPath())
-            ) {
-               Handler handler = postHandlers.get(currentRequest.getPath());
-               handler.handle(currentRequest, out);
+            } else if (request.getMethod().equals("POST") && postHandlers.containsKey(request.getPath())) {
+               Handler handler = postHandlers.get(request.getPath());
+               handler.handle(request, out);
 
             } else {
                System.out.println("> 404");
@@ -91,43 +86,10 @@ public class Server {
                        "Connection: close\r\n" +
                        "\r\n").getBytes());
             }
-
             out.flush();
-            socket.close();
+            return;
          }//try-with-res
       }//while
    }//handleRequest
-
-   public static Request parseHttpRequest(String httpRequest) {
-      System.out.println("> parsing req started...");
-      Request request = new Request();
-      String[] lines = httpRequest.split("\n");
-
-      // Method, path
-      String[] firstLineTokens = lines[0].split(" ");
-      request.setMethod(firstLineTokens[0]);
-      request.setPath(firstLineTokens[1]);
-
-      // Headers
-      Map<String, String> headers = new HashMap<>();
-      for (int i = 1; i < lines.length; i++) {
-         String line = lines[i];
-
-         // Body
-         if (line.isEmpty()) {
-            StringBuilder body = new StringBuilder();
-            for (int j = i + 1; j < lines.length; j++) {
-               body.append(lines[j]);
-            }
-            request.setBody(body.toString());
-            break;
-         } else {
-            String[] headerTokens = line.split(": ");
-            headers.put(headerTokens[0], headerTokens[1]);
-         }
-      }
-      request.setHeaders(headers);
-      return request;
-   }
 
 }//Server
